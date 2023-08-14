@@ -21,38 +21,35 @@ jobs:
       - name: build
         run: cargo build
 
-    #   - name: Copy dist.zip to server
-    #     uses: appleboy/scp-action@master
-    #     with:
-    #       host: ${{ secrets.SERVER_HOST_STAGING }}
-    #       username: ${{ secrets.SERVER_USERNAME_STAGING }}
-    #       key: ${{ secrets.SSH_PRIVATE_KEY_STAGING }}
-    #       passphrase: ${{ secrets.PASSPHRASE_STAGING }}
-    #       port: 88
-    #       source: dist/
-    #       target: ~/
+      - name: Copy dist.zip to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST_STAGING }}
+          username: ${{ secrets.SERVER_USERNAME_STAGING }}
+          key: ${{ secrets.SSH_PRIVATE_KEY_STAGING }}
+          passphrase: ${{ secrets.PASSPHRASE_STAGING }}
+          port: 88
+          source: target/debug/rust-captcha-verification
+          target: ~/
 
-    #   - name: SSH into server and deploy
-    #     uses: appleboy/ssh-action@master
-    #     with:
-    #       host: ${{ secrets.SERVER_HOST_STAGING }}
-    #       username: ${{ secrets.SERVER_USERNAME_STAGING }}
-    #       key: ${{ secrets.SSH_PRIVATE_KEY_STAGING }}
-    #       passphrase: ${{ secrets.PASSPHRASE_STAGING }}
-    #       script: |
-    #         # Copy the contents of dist/ to /var/www/
-    #         sudo cp -r ~/dist/ /var/www/
+      - name: SSH into server and deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST_STAGING }}
+          username: ${{ secrets.SERVER_USERNAME_STAGING }}
+          key: ${{ secrets.SSH_PRIVATE_KEY_STAGING }}
+          passphrase: ${{ secrets.PASSPHRASE_STAGING }}
+          script: |
+            # Delete the old file
+            sudo rm /var/api/rust-captcha-verification
+          
+            # Copy the contents of dist/ to /var/www/
+            sudo cp ~/rust-captcha-verification /var/api/
 
-    #         # Copy permissions from html/ to the new files in /var/www/
-    #         sudo cp -rp /var/www/html/ /var/www/dist/
+            # Copy permissions from html/ to the new files in /var/www/
+            sudo chmod +x rust-captcha-verification
 
-    #         # Delete the old html directory
-    #         sudo rm -r /var/www/staging.donaldson.africa
+            # Delete the old .zip file and unzipped directory
+            rm ~/rust-captcha-verification
 
-    #         # Rename dist/ to donaldson.africa/
-    #         sudo mv /var/www/dist /var/www/staging.donaldson.africa
-
-    #         # Delete the old .zip file and unzipped directory
-    #         rm -r ~/dist
-
-    #       port: 88
+          port: 88
