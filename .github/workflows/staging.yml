@@ -64,6 +64,6 @@ jobs:
             sudo chmod +x /var/api/rust-captcha-verification
 
             # Delete the old .zip file and unzipped directory
-            rm ~/target
+            rm -R ~/target
 
           port: 88
