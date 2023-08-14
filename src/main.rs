@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         .route("/health", get(handler_healthy))
         .route("/captcha", post(handler_captcha));
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 2121));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 2121));
     println!("Listening on http://{}", addr);
 
     axum::Server::bind(&addr)
