@@ -99,14 +99,14 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     }
 }
 
-fn send_email_based_on_site(site: &str, fields: HashMap<String, String>) -> Result<()> {
+fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
     if let Ok(smtp_server) = env::var(format!("{}_SMTP_SERVER", site.to_ascii_uppercase())) {
         let email_to = env::var(format!("{}_EMAIL_TO", site.to_ascii_uppercase())).unwrap();
         let email_from = env::var(format!("{}_EMAIL_FROM", site.to_ascii_uppercase())).unwrap();
         let email_pass = env::var(format!("{}_EMAIL_PASS", site.to_ascii_uppercase())).unwrap();
-        let mut body = format!(
+        let body = format!(
             "You have a new contact request! Please see details below:\n{}",
-            hashmap_to_string(&fields)
+            hashmap_to_string(fields)
         );
         let email = Message::builder()
             .from(email_from.parse().unwrap())
@@ -118,7 +118,7 @@ fn send_email_based_on_site(site: &str, fields: HashMap<String, String>) -> Resu
         let creds =
             lettre::transport::smtp::authentication::Credentials::new(email_from, email_pass);
 
-        let mailer = SmtpTransport::relay("smtp-relay.gmail.com")
+        let mailer = SmtpTransport::relay(smtp_server.as_str())
             .unwrap()
             .credentials(creds)
             .build();
