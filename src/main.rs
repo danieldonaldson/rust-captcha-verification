@@ -45,7 +45,7 @@ struct CaptchaForm {
 }
 
 async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
-    let secret = env::var("GRECAPTCHA_SECRET_KEY").expect("SECRET_KEY must be set");
+    let secret = env::var("GRECAPTCHA_SECRET_KEY").expect("GRECAPTCHA_SECRET_KEY must be set");
     let mut form_data = HashMap::new();
     form_data.insert("secret", &secret);
     form_data.insert("response", &form.g_recaptcha_response);
