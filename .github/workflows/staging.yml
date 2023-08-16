@@ -69,8 +69,8 @@ jobs:
             # Copy env variables
             sudo rm /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             sudo touch /etc/systemd/system/rust-captcha-verification.service.d/env.conf
-            echo 'ENVIRONMENT="GRECAPTCHA_SECRET_KEY=${{secrets.GRECAPTCHA_SECRET_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf.conf
-            echo 'ENVIRONMENT="DONALDSON.AFRICA_SMTP_SERVER=${{secrets.DONALDSON.AFRICA_SMTP_SERVER_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf.conf
+            echo 'ENVIRONMENT="GRECAPTCHA_SECRET_KEY=${{secrets.GRECAPTCHA_SECRET_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'ENVIRONMENT="DONALDSON.AFRICA_SMTP_SERVER=${{secrets.DONALDSON_AFRICA_SMTP_SERVER_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
 
             # Start service again
             sudo systemctl daemon-reload
