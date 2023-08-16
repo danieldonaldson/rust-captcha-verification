@@ -38,7 +38,7 @@ async fn handler_healthy() -> impl IntoResponse {
 
 #[derive(Deserialize, Debug)]
 struct CaptchaForm {
-    #[serde(rename = "gtoken")]
+    #[serde(rename = "g-recaptcha-response")]
     g_recaptcha_response: String,
     #[serde(flatten)]
     pub fields_in_contact_form: HashMap<String, Value>,
@@ -49,8 +49,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     let mut form_data = HashMap::new();
     form_data.insert("secret", &secret);
     form_data.insert("response", &form.g_recaptcha_response);
-    dbg!(&form_data);
-    dbg!(&form);
 
     let client = reqwest::Client::new();
     let res = client
@@ -62,24 +60,31 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     match res {
         Ok(res) => {
             let json: Value = res.json().await.unwrap();
-            dbg!(&json);
+
             if json["success"].as_bool().unwrap_or(false) {
                 // continue on to do actions (i.e. send mail to info box)
+                println!("Success for token {}", &form.g_recaptcha_response);
                 Response::builder()
                     .status(StatusCode::OK)
                     .body(json!({"message": "Captcha verification successful"}).to_string())
                     .unwrap()
             } else {
                 // If Error send back generic failed error
+                println!("Error for token {}. ", &form.g_recaptcha_response);
+                dbg!(&json);
                 Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(json!({"message": "Captcha verification failed"}).to_string())
                     .unwrap()
             }
         }
-        Err(_) => Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(json!({"message": "Captcha verification failed"}).to_string())
-            .unwrap(),
+        Err(_) => {
+            println!("Error for token {}. ", &form.g_recaptcha_response);
+            dbg!(&res);
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(json!({"message": "Captcha verification failed"}).to_string())
+                .unwrap()
+        }
     }
 }
