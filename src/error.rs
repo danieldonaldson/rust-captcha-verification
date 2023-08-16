@@ -5,7 +5,9 @@ use axum::response::Response;
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
-pub enum Error {}
+pub enum Error {
+    SiteNotFoundError,
+}
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
