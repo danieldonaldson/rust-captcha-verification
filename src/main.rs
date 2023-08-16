@@ -124,6 +124,7 @@ fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Res
             .build();
 
         let result = mailer.send(&email);
+        dbg!(result);
         if result.is_ok() {
             Ok(())
         } else {
