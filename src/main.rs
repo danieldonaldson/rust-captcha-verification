@@ -71,7 +71,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
 
             if json["success"].as_bool().unwrap_or(false) {
                 // continue on to do actions (i.e. send mail to info box)
-                println!("Success for token {}", &form.g_recaptcha_response);
                 // send email
                 let email_send =
                     send_email_based_on_site(&form.site, &form.fields_in_contact_form).await;
