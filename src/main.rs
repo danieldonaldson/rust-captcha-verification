@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use dotenv::dotenv;
 use reqwest::header;
 use serde::Deserialize;
 use serde_json::json;
@@ -12,12 +13,22 @@ use serde_json::Value;
 use std::env;
 use std::{collections::HashMap, net::SocketAddr};
 
-pub use self::error::{Error, Result};
+pub use self::error::{AxumError, Result};
 mod error;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    check_env();
+    dotenv().ok();
+    check_env_on_async_fns();
+
+    let dsn = env::var("SENTRY_DSN").expect("Missing SENTRY_DSN");
+    let _guard = sentry::init((
+        dsn,
+        sentry::ClientOptions {
+            release: sentry::release_name!(),
+            ..Default::default()
+        },
+    ));
 
     let routes_all = Router::new()
         .route("/health", get(handler_healthy))
@@ -34,7 +45,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn check_env() {
+fn check_env_on_async_fns() {
     let _ = env::var("GRECAPTCHA_SECRET_KEY").expect("GRECAPTCHA_SECRET_KEY must be set");
 }
 
@@ -64,12 +75,11 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         .form(&form_data)
         .send()
         .await;
-    dbg!(&res);
 
     match res {
         Ok(res) => {
             let json: Value = res.json().await.unwrap();
-
+            dbg!(&json);
             if json["success"].as_bool().unwrap_or(false) {
                 // continue on to do actions (i.e. send mail to info box)
                 // send email
@@ -82,19 +92,27 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
                         .body(json!({"message": "Captcha verification successful"}).to_string())
                         .unwrap(),
                     Err(e) => match e {
-                        Error::SiteNotFoundError => Response::builder()
-                            .status(StatusCode::UNAUTHORIZED)
-                            .body(json!({"message": "Site not found"}).to_string())
-                            .unwrap(),
-                        Error::EmailError => Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(json!({"message": "Cannot send email"}).to_string())
-                            .unwrap(),
+                        AxumError::SiteNotFoundError => {
+                            sentry::capture_error(&e);
+                            Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .body(json!({"message": "Site not found"}).to_string())
+                                .unwrap()
+                        }
+                        _ => {
+                            sentry::capture_error(&e);
+                            Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(json!({"message": "Cannot send email"}).to_string())
+                                .unwrap()
+                        }
                     },
                 }
             } else {
                 // If Error send back generic failed error
                 println!("Error for token {}. ", &form.g_recaptcha_response);
+                let err = AxumError::CaptchaFailedError;
+                sentry::capture_error(&err);
                 dbg!(&json);
                 Response::builder()
                     .status(StatusCode::BAD_REQUEST)
@@ -102,9 +120,10 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
                     .unwrap()
             }
         }
-        Err(_) => {
+        Err(err) => {
             println!("Error for token {}. ", &form.g_recaptcha_response);
-            dbg!(&res);
+            dbg!(&err);
+            sentry::capture_error(&err);
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(json!({"message": "Captcha verification failed"}).to_string())
@@ -156,10 +175,10 @@ async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) 
             .await;
         match res {
             Ok(_) => Ok(()),
-            Err(_) => Err(Error::EmailError),
+            Err(_) => Err(AxumError::EmailError),
         }
     } else {
-        Err(Error::SiteNotFoundError)
+        Err(AxumError::SiteNotFoundError)
     }
 }
 
@@ -208,7 +227,7 @@ mod tests {
         dbg!(&result);
         match result {
             Ok(_) => panic!("expected error"),
-            Err(Error::SiteNotFoundError) => {}
+            Err(AxumError::SiteNotFoundError) => {}
             Err(_) => panic!("wrong error"),
         }
     }
