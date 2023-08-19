@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use lettre::{Message, SmtpTransport, Transport};
+use reqwest::header;
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
@@ -17,6 +17,8 @@ mod error;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    check_env();
+
     let routes_all = Router::new()
         .route("/health", get(handler_healthy))
         .route("/captcha", post(handler_captcha));
@@ -30,6 +32,10 @@ async fn main() -> Result<()> {
         .unwrap();
 
     Ok(())
+}
+
+fn check_env() {
+    let _ = env::var("GRECAPTCHA_SECRET_KEY").expect("GRECAPTCHA_SECRET_KEY must be set");
 }
 
 async fn handler_healthy() -> impl IntoResponse {
@@ -67,16 +73,23 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
                 // continue on to do actions (i.e. send mail to info box)
                 println!("Success for token {}", &form.g_recaptcha_response);
                 // send email
-                if send_email_based_on_site(&form.site, &form.fields_in_contact_form).is_ok() {
-                    Response::builder()
+                let email_send =
+                    send_email_based_on_site(&form.site, &form.fields_in_contact_form).await;
+                match email_send {
+                    Ok(_) => Response::builder()
                         .status(StatusCode::OK)
                         .body(json!({"message": "Captcha verification successful"}).to_string())
-                        .unwrap()
-                } else {
-                    Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body(json!({"message": "Site not found"}).to_string())
-                        .unwrap()
+                        .unwrap(),
+                    Err(e) => match e {
+                        Error::SiteNotFoundError => Response::builder()
+                            .status(StatusCode::UNAUTHORIZED)
+                            .body(json!({"message": "Site not found"}).to_string())
+                            .unwrap(),
+                        Error::EmailError => Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(json!({"message": "Cannot send email"}).to_string())
+                            .unwrap(),
+                    },
                 }
             } else {
                 // If Error send back generic failed error
@@ -99,36 +112,53 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     }
 }
 
-fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
-    if let Ok(smtp_server) = env::var(format!("{}_SMTP_SERVER", site.to_ascii_uppercase())) {
+async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
+    if let Ok(api_key) = env::var(format!(
+        "{}_SENDGRID_API_KEY_STAGING",
+        site.to_ascii_uppercase()
+    )) {
         let email_to = env::var(format!("{}_EMAIL_TO", site.to_ascii_uppercase())).unwrap();
         let email_from = env::var(format!("{}_EMAIL_FROM", site.to_ascii_uppercase())).unwrap();
-        let email_pass = env::var(format!("{}_EMAIL_PASS", site.to_ascii_uppercase())).unwrap();
         let body = format!(
             "You have a new contact request! Please see details below:\n{}",
             hashmap_to_string(fields)
         );
-        let email = Message::builder()
-            .from(email_from.parse().unwrap())
-            .to(email_to.parse().unwrap())
-            .subject("New contact us request!")
-            .body(body)
-            .unwrap();
+        let subject = "New lead from your website!";
 
-        let creds =
-            lettre::transport::smtp::authentication::Credentials::new(email_from, email_pass);
-
-        let mailer = SmtpTransport::relay(smtp_server.as_str())
-            .unwrap()
-            .credentials(creds)
-            .build();
-
-        let result = mailer.send(&email);
-        dbg!(&result);
-        if result.is_ok() {
-            Ok(())
-        } else {
-            Err(Error::EmailError)
+        let client = reqwest::Client::new();
+        let res = client
+            .post("https://api.sendgrid.com/v3/mail/send")
+            .header(header::AUTHORIZATION, format!("Bearer {}", api_key))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(
+                json!({
+                    "personalizations": [
+                        {
+                            "to": [
+                                {
+                                    "email": email_to
+                                }
+                            ],
+                            "subject": subject
+                        }
+                    ],
+                    "from": {
+                        "email": email_from
+                    },
+                    "content": [
+                        {
+                            "type": "text/plain",
+                            "value": body
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .send()
+            .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::EmailError),
         }
     } else {
         Err(Error::SiteNotFoundError)
@@ -141,4 +171,47 @@ fn hashmap_to_string(map: &HashMap<String, String>) -> String {
         result.push_str(&format!("{}: {}\n", key, value));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_env() {
+        dotenv::from_filename(".env.testing").ok();
+    }
+    #[tokio::test]
+    async fn test_send_email_based_on_site() {
+        setup_env();
+        let site = "donaldson_africa";
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), "Test Name".to_string());
+        fields.insert("email".to_string(), "test@example.com".to_string());
+        fields.insert("message".to_string(), "Test message".to_string());
+
+        // Call the function being tested
+        let result = send_email_based_on_site(site, &fields).await;
+
+        // Assert that the result is as expected
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_send_email_based_on_site_fails() {
+        setup_env();
+        // Set up test data
+        let site = "incorrect site";
+        let fields = HashMap::new();
+
+        // Call the function being tested
+        let result = send_email_based_on_site(site, &fields).await;
+
+        // Assert that the result is as expected
+        dbg!(&result);
+        match result {
+            Ok(_) => panic!("expected error"),
+            Err(Error::SiteNotFoundError) => {}
+            Err(_) => panic!("wrong error"),
+        }
+    }
 }

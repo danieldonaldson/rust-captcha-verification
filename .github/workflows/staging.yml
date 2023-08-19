@@ -71,10 +71,9 @@ jobs:
             sudo touch /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo '[Service]' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="GRECAPTCHA_SECRET_KEY=${{secrets.GRECAPTCHA_SECRET_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
-            echo 'Environment="DONALDSON_AFRICA_SMTP_SERVER=${{secrets.DONALDSON_AFRICA_SMTP_SERVER_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_SMTP_SERVER=${{secrets.DONALDSON_AFRICA_SENDGRID_API_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="DONALDSON_AFRICA_EMAIL_TO=${{secrets.DONALDSON_AFRICA_EMAIL_TO_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="DONALDSON_AFRICA_EMAIL_FROM=${{secrets.DONALDSON_AFRICA_EMAIL_FROM_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
-            echo 'Environment="DONALDSON_AFRICA_EMAIL_PASS=${{secrets.DONALDSON_AFRICA_EMAIL_PASS_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
 
             # Start service again
             sudo systemctl daemon-reload
