@@ -1,0 +1,92 @@
+name: Deploy to production server
+
+on:
+  # push:
+  #   branches:
+  #     - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install dependencies and build
+        run: |
+          rustup update stable
+          rustup default stable
+      
+      - name: Generate Cargo.lock hash
+        id: cache-key
+        run: echo "::set-output name=hash::$(sha256sum Cargo.lock | awk '{print $1}')"
+      
+      - name: Cache target directory
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ steps.cache-key.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.cache-name }}
+            ${{ runner.os }}-build
+            ${{ runner.os }}
+        
+      - name: build
+        run: cargo build
+
+      - name: Copy file to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+          port: 88
+          source: target/debug/rust-captcha-verification
+          target: ~/
+
+      - name: SSH into server and deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+          script: |
+            # Stop old service
+            sudo systemctl stop rust-captcha-verification.service
+
+            # Delete the old file
+            sudo rm /var/api/rust-captcha-verification
+          
+            # Copy the contents of dist/ to /var/www/
+            sudo cp ~/target/debug/rust-captcha-verification /var/api/
+
+            # Copy permissions from html/ to the new files in /var/www/
+            sudo chmod +x /var/api/rust-captcha-verification
+
+            # Copy env variables
+            sudo rm /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            sudo touch /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo '[Service]' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="GRECAPTCHA_SECRET_KEY=${{secrets.GRECAPTCHA_SECRET_KEY}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            # Mail
+            echo 'Environment="DONALDSON_AFRICA_SENDGRID_API_KEY=${{secrets.SENDGRID_API_KEY}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_EMAIL_TO=${{secrets.DONALDSON_AFRICA_EMAIL_TO}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_EMAIL_FROM=${{secrets.DONALDSON_AFRICA_EMAIL_FROM}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            # We use the same key, but important to have this here to detect the site
+            echo 'Environment="STEAD_AFRICA_SENDGRID_API_KEY=${{secrets.SENDGRID_API_KEY}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="STEAD_AFRICA_EMAIL_TO=${{secrets.STEAD_AFRICA_EMAIL_TO}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="STEAD_AFRICA_EMAIL_FROM=${{secrets.STEAD_AFRICA_EMAIL_FROM}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            # Sentry
+            echo 'Environment="SENTRY_DSN=${{secrets.SENTRY_DSN}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+
+            # Start service again
+            sudo systemctl daemon-reload
+            sudo systemctl start rust-captcha-verification.service
+
+            # Delete the old .zip file and unzipped directory
+            rm -R ~/target
+          port: 88
