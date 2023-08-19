@@ -54,6 +54,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY_STAGING }}
           passphrase: ${{ secrets.PASSPHRASE_STAGING }}
           script: |
+            # Stop old service
+            sudo systemctl stop rust-captcha-verification.service
+
             # Delete the old file
             sudo rm /var/api/rust-captcha-verification
           
@@ -63,7 +66,19 @@ jobs:
             # Copy permissions from html/ to the new files in /var/www/
             sudo chmod +x /var/api/rust-captcha-verification
 
+            # Copy env variables
+            sudo rm /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            sudo touch /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo '[Service]' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="GRECAPTCHA_SECRET_KEY=${{secrets.GRECAPTCHA_SECRET_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_SENDGRID_API_KEY=${{secrets.DONALDSON_AFRICA_SENDGRID_API_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_EMAIL_TO=${{secrets.DONALDSON_AFRICA_EMAIL_TO_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_EMAIL_FROM=${{secrets.DONALDSON_AFRICA_EMAIL_FROM_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+
+            # Start service again
+            sudo systemctl daemon-reload
+            sudo systemctl start rust-captcha-verification.service
+
             # Delete the old .zip file and unzipped directory
             rm -R ~/target
-
           port: 88
