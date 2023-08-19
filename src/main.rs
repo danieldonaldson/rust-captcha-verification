@@ -79,7 +79,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     match res {
         Ok(res) => {
             let json: Value = res.json().await.unwrap();
-            dbg!(&json);
             if json["success"].as_bool().unwrap_or(false) {
                 // continue on to do actions (i.e. send mail to info box)
                 // send email
