@@ -71,10 +71,11 @@ jobs:
             sudo touch /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo '[Service]' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="GRECAPTCHA_SECRET_KEY=${{secrets.GRECAPTCHA_SECRET_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
-            echo 'Environment="DONALDSON_AFRICA_SENDGRID_API_KEY=${{secrets.DONALDSON_AFRICA_SENDGRID_API_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            echo 'Environment="DONALDSON_AFRICA_SENDGRID_API_KEY=${{secrets.SENDGRID_API_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="DONALDSON_AFRICA_EMAIL_TO=${{secrets.DONALDSON_AFRICA_EMAIL_TO_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="DONALDSON_AFRICA_EMAIL_FROM=${{secrets.DONALDSON_AFRICA_EMAIL_FROM_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
-            echo 'Environment="STEAD_AFRICA_SENDGRID_API_KEY=${{secrets.STEAD_AFRICA_SENDGRID_API_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
+            # We use the same key, but important to have this here to detect the site
+            echo 'Environment="STEAD_AFRICA_SENDGRID_API_KEY=${{secrets.SENDGRID_API_KEY_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="STEAD_AFRICA_EMAIL_TO=${{secrets.STEAD_AFRICA_EMAIL_TO_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
             echo 'Environment="STEAD_AFRICA_EMAIL_FROM=${{secrets.STEAD_AFRICA_EMAIL_FROM_STAGING}}"' | sudo tee -a /etc/systemd/system/rust-captcha-verification.service.d/env.conf
 
