@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use serde_json::Value;
 use std::error::Error;
 use std::fmt;
 
@@ -10,7 +11,7 @@ pub type Result<T> = core::result::Result<T, AxumError>;
 pub enum AxumError {
     SiteNotFoundError,
     EmailError,
-    CaptchaFailedError,
+    CaptchaFailedError(Value),
 }
 
 impl IntoResponse for AxumError {
@@ -31,7 +32,9 @@ impl fmt::Display for AxumError {
         match self {
             AxumError::SiteNotFoundError => write!(f, "Site not found"),
             AxumError::EmailError => write!(f, "Email error"),
-            AxumError::CaptchaFailedError => write!(f, "Captcha failed error"),
+            AxumError::CaptchaFailedError(json) => {
+                write!(f, "Captcha failed error. Response: {}", json)
+            }
         }
     }
 }

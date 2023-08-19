@@ -111,9 +111,8 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             } else {
                 // If Error send back generic failed error
                 println!("Error for token {}. ", &form.g_recaptcha_response);
-                let err = AxumError::CaptchaFailedError;
+                let err = AxumError::CaptchaFailedError(json);
                 sentry::capture_error(&err);
-                dbg!(&json);
                 Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(json!({"message": "Captcha verification failed"}).to_string())
@@ -121,11 +120,10 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             }
         }
         Err(err) => {
-            println!("Error for token {}. ", &form.g_recaptcha_response);
-            dbg!(&err);
+            println!("Error completing request");
             sentry::capture_error(&err);
             Response::builder()
-                .status(StatusCode::BAD_REQUEST)
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(json!({"message": "Captcha verification failed"}).to_string())
                 .unwrap()
         }
