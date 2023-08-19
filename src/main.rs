@@ -113,10 +113,7 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
 }
 
 async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
-    if let Ok(api_key) = env::var(format!(
-        "{}_SENDGRID_API_KEY_STAGING",
-        site.to_ascii_uppercase()
-    )) {
+    if let Ok(api_key) = env::var(format!("{}_SENDGRID_API_KEY", site.to_ascii_uppercase())) {
         let email_to = env::var(format!("{}_EMAIL_TO", site.to_ascii_uppercase())).unwrap();
         let email_from = env::var(format!("{}_EMAIL_FROM", site.to_ascii_uppercase())).unwrap();
         let body = format!(
