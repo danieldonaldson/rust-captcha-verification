@@ -109,7 +109,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
                 }
             } else {
                 // If Error send back generic failed error
-                println!("Error for token {}. ", &form.g_recaptcha_response);
                 let err = AxumError::CaptchaFailedError(json);
                 sentry::capture_error(&err);
                 Response::builder()
@@ -119,7 +118,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             }
         }
         Err(err) => {
-            println!("Error completing request");
             sentry::capture_error(&err);
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -221,7 +219,6 @@ mod tests {
         let result = send_email_based_on_site(site, &fields).await;
 
         // Assert that the result is as expected
-        dbg!(&result);
         match result {
             Ok(_) => panic!("expected error"),
             Err(AxumError::SiteNotFoundError) => {}
