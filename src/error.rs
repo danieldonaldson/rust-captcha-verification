@@ -11,9 +11,11 @@ pub type Result<T> = core::result::Result<T, AxumError>;
 pub enum AxumError {
     SiteNotFoundError,
     EmailError,
+    ResendAPIKeyError,
     CaptchaFailedError(Value),
     ValidationError(String),
     ServerError(String),
+    ResendError(String),
 }
 
 impl IntoResponse for AxumError {
@@ -38,6 +40,8 @@ impl fmt::Display for AxumError {
             }
             AxumError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
             AxumError::ServerError(msg) => write!(f, "Server error: {}", msg),
+            AxumError::ResendError(msg) => write!(f, "Resend error: {}", msg),
+            AxumError::ResendAPIKeyError => write!(f, "Resend API key error"),
         }
     }
 }

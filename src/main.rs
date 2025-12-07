@@ -8,6 +8,8 @@ use axum::{
 use dotenv::dotenv;
 use lazy_static::lazy_static;
 use regex::Regex;
+use resend_rs::types::CreateEmailBaseOptions;
+use resend_rs::Resend;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
@@ -58,8 +60,8 @@ async fn main() -> Result<()> {
     ));
 
     // Configure CORS - specify allowed origins from environment variable
-    let allowed_origins = env::var("ALLOWED_ORIGINS")
-        .expect("ALLOWED_ORIGINS environment variable must be set");
+    let allowed_origins =
+        env::var("ALLOWED_ORIGINS").expect("ALLOWED_ORIGINS environment variable must be set");
 
     println!("Allowed origins from env: {}", allowed_origins);
 
@@ -87,11 +89,7 @@ async fn main() -> Result<()> {
     let cors = CorsLayer::new()
         .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            header::AUTHORIZATION,
-            header::ACCEPT,
-        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
         .allow_credentials(true);
 
     // Limit request body size to 1MB to prevent abuse
@@ -104,19 +102,15 @@ async fn main() -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 2121));
     println!("Listening on http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| {
-            eprintln!("Failed to bind to address {}: {}", addr, e);
-            AxumError::ServerError(e.to_string())
-        })?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        eprintln!("Failed to bind to address {}: {}", addr, e);
+        AxumError::ServerError(e.to_string())
+    })?;
 
-    axum::serve(listener, routes_all)
-        .await
-        .map_err(|e| {
-            eprintln!("Server error: {}", e);
-            AxumError::ServerError(e.to_string())
-        })?;
+    axum::serve(listener, routes_all).await.map_err(|e| {
+        eprintln!("Server error: {}", e);
+        AxumError::ServerError(e.to_string())
+    })?;
 
     Ok(())
 }
@@ -226,14 +220,16 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
                 eprintln!("Email send failed for site '{}': {}", form.site, e);
                 sentry::capture_error(&e);
                 let (status, message) = match &e {
-                    AxumError::SiteNotFoundError => (StatusCode::UNAUTHORIZED, "Site not found".to_string()),
+                    AxumError::SiteNotFoundError => {
+                        (StatusCode::UNAUTHORIZED, "Site not found".to_string())
+                    }
                     AxumError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "Cannot send email".to_string()),
+                    _ => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Cannot send email".to_string(),
+                    ),
                 };
-                (status, Json(JsonResponse {
-                    message,
-                }))
-                    .into_response()
+                (status, Json(JsonResponse { message })).into_response()
             }
         }
     } else {
@@ -246,12 +242,18 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         (
             StatusCode::BAD_REQUEST,
             Json(JsonResponse {
-                message: format!("Captcha verification failed: {}", json["error-codes"].as_array().map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                }).unwrap_or_else(|| "Unknown error".to_string())),
+                message: format!(
+                    "Captcha verification failed: {}",
+                    json["error-codes"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                ),
             }),
         )
             .into_response()
@@ -261,14 +263,13 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
 async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
     let site_upper = site.to_ascii_uppercase();
 
-    let api_key = env::var(format!("{}_SENDGRID_API_KEY", site_upper))
-        .map_err(|_| AxumError::SiteNotFoundError)?;
+    let api_key = env::var("RESEND_API_KEY").map_err(|_| AxumError::ResendAPIKeyError)?;
 
-    let email_to = env::var(format!("{}_EMAIL_TO", site_upper))
-        .map_err(|_| AxumError::SiteNotFoundError)?;
+    let email_to =
+        env::var(format!("{}_EMAIL_TO", site_upper)).map_err(|_| AxumError::SiteNotFoundError)?;
 
-    let email_from = env::var(format!("{}_EMAIL_FROM", site_upper))
-        .map_err(|_| AxumError::SiteNotFoundError)?;
+    let email_from =
+        env::var(format!("{}_EMAIL_FROM", site_upper)).map_err(|_| AxumError::SiteNotFoundError)?;
 
     // Validate email addresses
     if !EMAIL_REGEX.is_match(&email_to) {
@@ -291,33 +292,19 @@ async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) 
     );
     let subject = "New lead from your website!";
 
-    let res = HTTP_CLIENT
-        .post("https://api.sendgrid.com/v3/mail/send")
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", api_key))
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&json!({
-            "personalizations": [{
-                "to": [{"email": email_to}],
-                "subject": subject
-            }],
-            "from": {"email": email_from},
-            "content": [{
-                "type": "text/plain",
-                "value": body
-            }]
-        }))
-        .send()
-        .await
-        .map_err(|e| {
-            eprintln!("Failed to send email: {}", e);
-            AxumError::EmailError
-        })?;
-
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        eprintln!("SendGrid error: status={}, body={:?}", res.status(), res.text().await);
-        Err(AxumError::EmailError)
+    let resend = Resend::new(&api_key);
+    let email =
+        CreateEmailBaseOptions::new(email_from, [email_to], subject).with_text(body.as_str());
+    let res = resend.emails.send(email).await;
+    match res {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            eprintln!("Resend email error: {}", err);
+            Err(AxumError::ResendError(format!(
+                "Failed to send email: {}",
+                err
+            )))
+        }
     }
 }
 
@@ -350,7 +337,7 @@ mod tests {
 
         // Assert that the result is as expected
         match result {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 eprintln!("Test failed with error: {:?}", e);
                 panic!("Expected Ok, got Err: {}", e);
