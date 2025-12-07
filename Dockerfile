@@ -1,5 +1,5 @@
 # Multi-stage build for Rust application
-FROM rust:1.75-slim AS builder
+FROM rust:1.91-slim AS builder
 
 WORKDIR /app
 
@@ -9,11 +9,20 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests
+# Copy manifests first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 
-# Copy source code
+# Create a dummy main.rs to cache dependencies
+RUN mkdir src && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
+
+# Copy actual source code
 COPY src ./src
+
+# Touch main.rs to ensure it's rebuilt
+RUN touch src/main.rs
 
 # Build for release
 RUN cargo build --release

@@ -1,18 +1,17 @@
 use axum::{
     extract::Form,
-    http::{HeaderValue, Response, StatusCode},
-    response::{Html, IntoResponse},
+    http::{header, HeaderValue, Method, StatusCode},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use dotenv::dotenv;
-use reqwest::header;
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
 use std::env;
 use std::{collections::HashMap, net::SocketAddr};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 pub use self::error::{AxumError, Result};
 mod error;
@@ -42,8 +41,12 @@ async fn main() -> Result<()> {
 
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods(Any)
-        .allow_headers(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::ACCEPT,
+        ])
         .allow_credentials(true);
 
     let routes_all = Router::new()
@@ -54,8 +57,8 @@ async fn main() -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 2121));
     println!("Listening on http://{}", addr);
 
-    axum::Server::bind(&addr)
-        .serve(routes_all.into_make_service())
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, routes_all)
         .await
         .unwrap();
 
@@ -80,117 +83,119 @@ struct CaptchaForm {
     pub fields_in_contact_form: HashMap<String, String>,
 }
 
-async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
-    let secret = env::var("GRECAPTCHA_SECRET_KEY").expect("GRECAPTCHA_SECRET_KEY must be set");
+async fn handler_captcha(Form(form): Form<CaptchaForm>) -> Response<String> {
+    let secret = match env::var("GRECAPTCHA_SECRET_KEY") {
+        Ok(s) => s,
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(json!({"message": "Server configuration error"}).to_string())
+                .unwrap();
+        }
+    };
+
     let mut form_data = HashMap::new();
     form_data.insert("secret", &secret);
     form_data.insert("response", &form.g_recaptcha_response);
 
     let client = reqwest::Client::new();
-    let res = client
+    let res = match client
         .post("https://www.google.com/recaptcha/api/siteverify")
         .form(&form_data)
         .send()
-        .await;
+        .await
+    {
+        Ok(res) => res,
+        Err(err) => {
+            sentry::capture_error(&err);
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(json!({"message": "Captcha verification failed"}).to_string())
+                .unwrap();
+        }
+    };
 
-    match res {
-        Ok(res) => {
-            let json: Value = res.json().await.unwrap();
-            if json["success"].as_bool().unwrap_or(false) {
-                // continue on to do actions (i.e. send mail to info box)
-                // send email
-                let email_send_result =
-                    send_email_based_on_site(&form.site, &form.fields_in_contact_form).await;
+    let json: Value = match res.json().await {
+        Ok(j) => j,
+        Err(err) => {
+            sentry::capture_error(&err);
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(json!({"message": "Failed to parse captcha response"}).to_string())
+                .unwrap();
+        }
+    };
 
-                match email_send_result {
-                    Ok(_) => Response::builder()
-                        .status(StatusCode::OK)
-                        .body(json!({"message": "Captcha verification successful"}).to_string())
-                        .unwrap(),
-                    Err(e) => match e {
-                        AxumError::SiteNotFoundError => {
-                            sentry::capture_error(&e);
-                            Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(json!({"message": "Site not found"}).to_string())
-                                .unwrap()
-                        }
-                        _ => {
-                            sentry::capture_error(&e);
-                            Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(json!({"message": "Cannot send email"}).to_string())
-                                .unwrap()
-                        }
-                    },
-                }
-            } else {
-                // If Error send back generic failed error
-                let err = AxumError::CaptchaFailedError(json);
-                sentry::capture_error(&err);
+    if json["success"].as_bool().unwrap_or(false) {
+        match send_email_based_on_site(&form.site, &form.fields_in_contact_form).await {
+            Ok(_) => Response::builder()
+                .status(StatusCode::OK)
+                .body(json!({"message": "Captcha verification successful"}).to_string())
+                .unwrap(),
+            Err(e) => {
+                sentry::capture_error(&e);
+                let (status, message) = match e {
+                    AxumError::SiteNotFoundError => (StatusCode::UNAUTHORIZED, "Site not found"),
+                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "Cannot send email"),
+                };
                 Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(json!({"message": "Captcha verification failed"}).to_string())
+                    .status(status)
+                    .body(json!({"message": message}).to_string())
                     .unwrap()
             }
         }
-        Err(err) => {
-            sentry::capture_error(&err);
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(json!({"message": "Captcha verification failed"}).to_string())
-                .unwrap()
-        }
+    } else {
+        let err = AxumError::CaptchaFailedError(json);
+        sentry::capture_error(&err);
+        Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(json!({"message": "Captcha verification failed"}).to_string())
+            .unwrap()
     }
 }
 
 async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
-    if let Ok(api_key) = env::var(format!("{}_SENDGRID_API_KEY", site.to_ascii_uppercase())) {
-        let email_to = env::var(format!("{}_EMAIL_TO", site.to_ascii_uppercase())).unwrap();
-        let email_from = env::var(format!("{}_EMAIL_FROM", site.to_ascii_uppercase())).unwrap();
-        let body = format!(
-            "You have a new contact request! Please see details below:\n{}",
-            hashmap_to_string(fields)
-        );
-        let subject = "New lead from your website!";
+    let site_upper = site.to_ascii_uppercase();
 
-        let client = reqwest::Client::new();
-        let res = client
-            .post("https://api.sendgrid.com/v3/mail/send")
-            .header(header::AUTHORIZATION, format!("Bearer {}", api_key))
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(
-                json!({
-                    "personalizations": [
-                        {
-                            "to": [
-                                {
-                                    "email": email_to
-                                }
-                            ],
-                            "subject": subject
-                        }
-                    ],
-                    "from": {
-                        "email": email_from
-                    },
-                    "content": [
-                        {
-                            "type": "text/plain",
-                            "value": body
-                        }
-                    ]
-                })
-                .to_string(),
-            )
-            .send()
-            .await;
-        match res {
-            Ok(_) => Ok(()),
-            Err(_) => Err(AxumError::EmailError),
-        }
+    let api_key = env::var(format!("{}_SENDGRID_API_KEY", site_upper))
+        .map_err(|_| AxumError::SiteNotFoundError)?;
+
+    let email_to = env::var(format!("{}_EMAIL_TO", site_upper))
+        .map_err(|_| AxumError::SiteNotFoundError)?;
+
+    let email_from = env::var(format!("{}_EMAIL_FROM", site_upper))
+        .map_err(|_| AxumError::SiteNotFoundError)?;
+
+    let body = format!(
+        "You have a new contact request! Please see details below:\n{}",
+        hashmap_to_string(fields)
+    );
+    let subject = "New lead from your website!";
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post("https://api.sendgrid.com/v3/mail/send")
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", api_key))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&json!({
+            "personalizations": [{
+                "to": [{"email": email_to}],
+                "subject": subject
+            }],
+            "from": {"email": email_from},
+            "content": [{
+                "type": "text/plain",
+                "value": body
+            }]
+        }))
+        .send()
+        .await
+        .map_err(|_| AxumError::EmailError)?;
+
+    if res.status().is_success() {
+        Ok(())
     } else {
-        Err(AxumError::SiteNotFoundError)
+        Err(AxumError::EmailError)
     }
 }
 
