@@ -61,10 +61,28 @@ async fn main() -> Result<()> {
     let allowed_origins = env::var("ALLOWED_ORIGINS")
         .expect("ALLOWED_ORIGINS environment variable must be set");
 
+    println!("Allowed origins from env: {}", allowed_origins);
+
     let origins: Vec<HeaderValue> = allowed_origins
         .split(',')
-        .filter_map(|origin| origin.trim().parse().ok())
+        .filter_map(|origin| {
+            let trimmed = origin.trim();
+            match trimmed.parse::<HeaderValue>() {
+                Ok(val) => {
+                    println!("Added allowed origin: {}", trimmed);
+                    Some(val)
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse origin '{}': {}", trimmed, e);
+                    None
+                }
+            }
+        })
         .collect();
+
+    if origins.is_empty() {
+        panic!("No valid origins were parsed from ALLOWED_ORIGINS");
+    }
 
     let cors = CorsLayer::new()
         .allow_origin(origins)
