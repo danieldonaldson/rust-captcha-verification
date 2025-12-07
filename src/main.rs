@@ -1,25 +1,52 @@
 use axum::{
     extract::Form,
     http::{header, HeaderValue, Method, StatusCode},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
 use dotenv::dotenv;
-use serde::Deserialize;
-use serde_json::json;
-use serde_json::Value;
+use lazy_static::lazy_static;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::env;
 use std::{collections::HashMap, net::SocketAddr};
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 
 pub use self::error::{AxumError, Result};
 mod error;
 
+lazy_static! {
+    static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("Failed to create HTTP client");
+
+    static ref GRECAPTCHA_SECRET_KEY: String = env::var("GRECAPTCHA_SECRET_KEY")
+        .expect("GRECAPTCHA_SECRET_KEY must be set");
+
+    static ref EMAIL_REGEX: Regex = Regex::new(
+        r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+    ).expect("Failed to compile email regex");
+
+    static ref SITE_NAME_REGEX: Regex = Regex::new(r"^[a-zA-Z0-9_-]+$")
+        .expect("Failed to compile site name regex");
+}
+
+#[derive(Serialize)]
+struct JsonResponse {
+    message: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    check_env_on_async_fns();
+
+    // Force initialization of lazy statics to validate env vars early
+    lazy_static::initialize(&GRECAPTCHA_SECRET_KEY);
+    lazy_static::initialize(&HTTP_CLIENT);
 
     let dsn = env::var("SENTRY_DSN").expect("Missing SENTRY_DSN");
     let _guard = sentry::init((
@@ -49,29 +76,37 @@ async fn main() -> Result<()> {
         ])
         .allow_credentials(true);
 
+    // Limit request body size to 1MB to prevent abuse
     let routes_all = Router::new()
         .route("/health", get(handler_healthy))
         .route("/captcha", post(handler_captcha))
-        .layer(cors);
+        .layer(cors)
+        .layer(RequestBodyLimitLayer::new(1024 * 1024));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 2121));
     println!("Listening on http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| {
+            eprintln!("Failed to bind to address {}: {}", addr, e);
+            AxumError::ServerError(e.to_string())
+        })?;
+
     axum::serve(listener, routes_all)
         .await
-        .unwrap();
+        .map_err(|e| {
+            eprintln!("Server error: {}", e);
+            AxumError::ServerError(e.to_string())
+        })?;
 
     Ok(())
 }
 
-fn check_env_on_async_fns() {
-    let _ = env::var("GRECAPTCHA_SECRET_KEY").expect("GRECAPTCHA_SECRET_KEY must be set");
-}
-
 async fn handler_healthy() -> impl IntoResponse {
-    let html = "Healthy";
-    Html(html)
+    Json(JsonResponse {
+        message: "Healthy".to_string(),
+    })
 }
 
 #[derive(Deserialize, Debug)]
@@ -83,23 +118,47 @@ struct CaptchaForm {
     pub fields_in_contact_form: HashMap<String, String>,
 }
 
-async fn handler_captcha(Form(form): Form<CaptchaForm>) -> Response<String> {
-    let secret = match env::var("GRECAPTCHA_SECRET_KEY") {
-        Ok(s) => s,
-        Err(_) => {
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(json!({"message": "Server configuration error"}).to_string())
-                .unwrap();
+async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
+    // Validate site name
+    if !SITE_NAME_REGEX.is_match(&form.site) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(JsonResponse {
+                message: "Invalid site name format".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Validate email if present in fields
+    if let Some(email) = form.fields_in_contact_form.get("email") {
+        if !EMAIL_REGEX.is_match(email) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(JsonResponse {
+                    message: "Invalid email format".to_string(),
+                }),
+            )
+                .into_response();
         }
-    };
+    }
+
+    // Validate captcha response is not empty
+    if form.g_recaptcha_response.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(JsonResponse {
+                message: "Captcha response is required".to_string(),
+            }),
+        )
+            .into_response();
+    }
 
     let mut form_data = HashMap::new();
-    form_data.insert("secret", &secret);
+    form_data.insert("secret", GRECAPTCHA_SECRET_KEY.as_str());
     form_data.insert("response", &form.g_recaptcha_response);
 
-    let client = reqwest::Client::new();
-    let res = match client
+    let res = match HTTP_CLIENT
         .post("https://www.google.com/recaptcha/api/siteverify")
         .form(&form_data)
         .send()
@@ -108,10 +167,13 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> Response<String> {
         Ok(res) => res,
         Err(err) => {
             sentry::capture_error(&err);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(json!({"message": "Captcha verification failed"}).to_string())
-                .unwrap();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(JsonResponse {
+                    message: "Captcha verification failed".to_string(),
+                }),
+            )
+                .into_response();
         }
     };
 
@@ -119,38 +181,48 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> Response<String> {
         Ok(j) => j,
         Err(err) => {
             sentry::capture_error(&err);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(json!({"message": "Failed to parse captcha response"}).to_string())
-                .unwrap();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(JsonResponse {
+                    message: "Failed to parse captcha response".to_string(),
+                }),
+            )
+                .into_response();
         }
     };
 
     if json["success"].as_bool().unwrap_or(false) {
         match send_email_based_on_site(&form.site, &form.fields_in_contact_form).await {
-            Ok(_) => Response::builder()
-                .status(StatusCode::OK)
-                .body(json!({"message": "Captcha verification successful"}).to_string())
-                .unwrap(),
+            Ok(_) => (
+                StatusCode::OK,
+                Json(JsonResponse {
+                    message: "Captcha verification successful".to_string(),
+                }),
+            )
+                .into_response(),
             Err(e) => {
                 sentry::capture_error(&e);
-                let (status, message) = match e {
-                    AxumError::SiteNotFoundError => (StatusCode::UNAUTHORIZED, "Site not found"),
-                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "Cannot send email"),
+                let (status, message) = match &e {
+                    AxumError::SiteNotFoundError => (StatusCode::UNAUTHORIZED, "Site not found".to_string()),
+                    AxumError::ValidationError(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+                    _ => (StatusCode::INTERNAL_SERVER_ERROR, "Cannot send email".to_string()),
                 };
-                Response::builder()
-                    .status(status)
-                    .body(json!({"message": message}).to_string())
-                    .unwrap()
+                (status, Json(JsonResponse {
+                    message,
+                }))
+                    .into_response()
             }
         }
     } else {
         let err = AxumError::CaptchaFailedError(json);
         sentry::capture_error(&err);
-        Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(json!({"message": "Captcha verification failed"}).to_string())
-            .unwrap()
+        (
+            StatusCode::BAD_REQUEST,
+            Json(JsonResponse {
+                message: "Captcha verification failed".to_string(),
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -166,14 +238,28 @@ async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) 
     let email_from = env::var(format!("{}_EMAIL_FROM", site_upper))
         .map_err(|_| AxumError::SiteNotFoundError)?;
 
+    // Validate email addresses
+    if !EMAIL_REGEX.is_match(&email_to) {
+        return Err(AxumError::ValidationError(format!(
+            "Invalid recipient email: {}",
+            email_to
+        )));
+    }
+
+    if !EMAIL_REGEX.is_match(&email_from) {
+        return Err(AxumError::ValidationError(format!(
+            "Invalid sender email: {}",
+            email_from
+        )));
+    }
+
     let body = format!(
         "You have a new contact request! Please see details below:\n{}",
         hashmap_to_string(fields)
     );
     let subject = "New lead from your website!";
 
-    let client = reqwest::Client::new();
-    let res = client
+    let res = HTTP_CLIENT
         .post("https://api.sendgrid.com/v3/mail/send")
         .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", api_key))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -190,11 +276,15 @@ async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) 
         }))
         .send()
         .await
-        .map_err(|_| AxumError::EmailError)?;
+        .map_err(|e| {
+            eprintln!("Failed to send email: {}", e);
+            AxumError::EmailError
+        })?;
 
     if res.status().is_success() {
         Ok(())
     } else {
+        eprintln!("SendGrid error: status={}, body={:?}", res.status(), res.text().await);
         Err(AxumError::EmailError)
     }
 }
@@ -227,7 +317,13 @@ mod tests {
         let result = send_email_based_on_site(site, &fields).await;
 
         // Assert that the result is as expected
-        assert!(result.is_ok());
+        match result {
+            Ok(_) => {},
+            Err(e) => {
+                eprintln!("Test failed with error: {:?}", e);
+                panic!("Expected Ok, got Err: {}", e);
+            }
+        }
     }
 
     #[tokio::test]

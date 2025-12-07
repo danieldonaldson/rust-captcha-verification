@@ -1280,6 +1280,8 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "dotenv",
+ "lazy_static",
+ "regex",
  "reqwest",
  "sentry",
  "serde",
@@ -1842,6 +1844,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body",
+ "http-body-util",
  "iri-string",
  "pin-project-lite",
  "tower",

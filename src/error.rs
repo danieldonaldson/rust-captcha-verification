@@ -12,6 +12,8 @@ pub enum AxumError {
     SiteNotFoundError,
     EmailError,
     CaptchaFailedError(Value),
+    ValidationError(String),
+    ServerError(String),
 }
 
 impl IntoResponse for AxumError {
@@ -34,6 +36,8 @@ impl fmt::Display for AxumError {
             AxumError::CaptchaFailedError(json) => {
                 write!(f, "Captcha failed error. Response: {}", json)
             }
+            AxumError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
+            AxumError::ServerError(msg) => write!(f, "Server error: {}", msg),
         }
     }
 }
