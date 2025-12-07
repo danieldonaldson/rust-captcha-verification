@@ -1,6 +1,6 @@
 use axum::{
     extract::Form,
-    http::{Response, StatusCode},
+    http::{HeaderValue, Response, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
     Router,
@@ -12,6 +12,7 @@ use serde_json::json;
 use serde_json::Value;
 use std::env;
 use std::{collections::HashMap, net::SocketAddr};
+use tower_http::cors::{Any, CorsLayer};
 
 pub use self::error::{AxumError, Result};
 mod error;
@@ -30,9 +31,25 @@ async fn main() -> Result<()> {
         },
     ));
 
+    // Configure CORS - specify allowed origins from environment variable
+    let allowed_origins = env::var("ALLOWED_ORIGINS")
+        .expect("ALLOWED_ORIGINS environment variable must be set");
+
+    let origins: Vec<HeaderValue> = allowed_origins
+        .split(',')
+        .filter_map(|origin| origin.trim().parse().ok())
+        .collect();
+
+    let cors = CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .allow_credentials(true);
+
     let routes_all = Router::new()
         .route("/health", get(handler_healthy))
-        .route("/captcha", post(handler_captcha));
+        .route("/captcha", post(handler_captcha))
+        .layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 2121));
     println!("Listening on http://{}", addr);

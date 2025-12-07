@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  captcha:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "2121:2121"
+    environment:
+      - GRECAPTCHA_SECRET_KEY=${GRECAPTCHA_SECRET_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      # Add environment variables for each site
+      # Format: {SITE_NAME_UPPERCASE}_SENDGRID_API_KEY
+      # Format: {SITE_NAME_UPPERCASE}_EMAIL_TO
+      # Format: {SITE_NAME_UPPERCASE}_EMAIL_FROM
+      # Example:
+      # - MYSITE_SENDGRID_API_KEY=${MYSITE_SENDGRID_API_KEY}
+      # - MYSITE_EMAIL_TO=${MYSITE_EMAIL_TO}
+      # - MYSITE_EMAIL_FROM=${MYSITE_EMAIL_FROM}
+    restart: unless-stopped
