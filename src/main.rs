@@ -210,15 +210,20 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     };
 
     if json["success"].as_bool().unwrap_or(false) {
+        println!("Captcha verification succeeded for site: {}", form.site);
         match send_email_based_on_site(&form.site, &form.fields_in_contact_form).await {
-            Ok(_) => (
-                StatusCode::OK,
-                Json(JsonResponse {
-                    message: "Captcha verification successful".to_string(),
-                }),
-            )
-                .into_response(),
+            Ok(_) => {
+                println!("Email sent successfully for site: {}", form.site);
+                (
+                    StatusCode::OK,
+                    Json(JsonResponse {
+                        message: "Captcha verification successful".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
             Err(e) => {
+                eprintln!("Email send failed for site '{}': {}", form.site, e);
                 sentry::capture_error(&e);
                 let (status, message) = match &e {
                     AxumError::SiteNotFoundError => (StatusCode::UNAUTHORIZED, "Site not found".to_string()),
@@ -232,12 +237,21 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             }
         }
     } else {
-        let err = AxumError::CaptchaFailedError(json);
+        eprintln!(
+            "Captcha verification failed for site '{}'. Response: {}",
+            form.site, json
+        );
+        let err = AxumError::CaptchaFailedError(json.clone());
         sentry::capture_error(&err);
         (
             StatusCode::BAD_REQUEST,
             Json(JsonResponse {
-                message: "Captcha verification failed".to_string(),
+                message: format!("Captcha verification failed: {}", json["error-codes"].as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }).unwrap_or_else(|| "Unknown error".to_string())),
             }),
         )
             .into_response()
