@@ -26,8 +26,8 @@ lazy_static! {
         .build()
         .expect("Failed to create HTTP client");
 
-    static ref GRECAPTCHA_SECRET_KEY: String = env::var("GRECAPTCHA_SECRET_KEY")
-        .expect("GRECAPTCHA_SECRET_KEY must be set");
+    static ref GOOGLE_ENTERPRISE_API_KEY: String = env::var("GOOGLE_ENTERPRISE_API_KEY")
+        .expect("GOOGLE_ENTERPRISE_API_KEY must be set");
 
     static ref EMAIL_REGEX: Regex = Regex::new(
         r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     dotenv().ok();
 
     // Force initialization of lazy statics to validate env vars early
-    lazy_static::initialize(&GRECAPTCHA_SECRET_KEY);
+    lazy_static::initialize(&GOOGLE_ENTERPRISE_API_KEY);
     lazy_static::initialize(&HTTP_CLIENT);
 
     let dsn = env::var("SENTRY_DSN").expect("Missing SENTRY_DSN");
@@ -166,13 +166,52 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             .into_response();
     }
 
-    let mut form_data = HashMap::new();
-    form_data.insert("secret", GRECAPTCHA_SECRET_KEY.as_str());
-    form_data.insert("response", &form.g_recaptcha_response);
+    // Get the Google Cloud project ID from environment
+    let project_id = match env::var("GOOGLE_PROJECT_ID") {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(JsonResponse {
+                    message: "Server configuration error: missing project ID".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Get the site-specific reCAPTCHA site key from environment
+    let site_upper = form.site.to_ascii_uppercase();
+    let site_key = match env::var(format!("{}_RECAPTCHA_SITE_KEY", site_upper)) {
+        Ok(key) => key,
+        Err(_) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(JsonResponse {
+                    message: "Site not found or not configured".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Build the Enterprise API request body
+    let request_body = json!({
+        "event": {
+            "token": form.g_recaptcha_response,
+            "siteKey": site_key,
+        }
+    });
+
+    // Use the Enterprise reCAPTCHA API endpoint
+    let url = format!(
+        "https://recaptchaenterprise.googleapis.com/v1/projects/{}/assessments?key={}",
+        project_id, GOOGLE_ENTERPRISE_API_KEY.as_str()
+    );
 
     let res = match HTTP_CLIENT
-        .post("https://www.google.com/recaptcha/api/siteverify")
-        .form(&form_data)
+        .post(&url)
+        .json(&request_body)
         .send()
         .await
     {
@@ -203,7 +242,10 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         }
     };
 
-    if json["success"].as_bool().unwrap_or(false) {
+    // Enterprise API returns tokenProperties.valid instead of success
+    let is_valid = json["tokenProperties"]["valid"].as_bool().unwrap_or(false);
+
+    if is_valid {
         println!("Captcha verification succeeded for site: {}", form.site);
         match send_email_based_on_site(&form.site, &form.fields_in_contact_form).await {
             Ok(_) => {
@@ -239,21 +281,16 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         );
         let err = AxumError::CaptchaFailedError(json.clone());
         sentry::capture_error(&err);
+
+        // Extract error reason from Enterprise API response
+        let error_msg = json["tokenProperties"]["invalidReason"]
+            .as_str()
+            .unwrap_or("Unknown error");
+
         (
             StatusCode::BAD_REQUEST,
             Json(JsonResponse {
-                message: format!(
-                    "Captcha verification failed: {}",
-                    json["error-codes"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        })
-                        .unwrap_or_else(|| "Unknown error".to_string())
-                ),
+                message: format!("Captcha verification failed: {}", error_msg),
             }),
         )
             .into_response()
