@@ -11,7 +11,7 @@ axum = "0.8"
 dotenv = "0.15"
 lazy_static = "1.4"
 regex = "1.12"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 resend-rs = "0.25"
 sentry = "0.48"
 serde = { version = "1.0", features = ["derive"] }
