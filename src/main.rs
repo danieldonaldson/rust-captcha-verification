@@ -1,5 +1,6 @@
+use async_trait::async_trait;
 use axum::{
-    extract::Form,
+    extract::{Form, State},
     http::{header, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -13,6 +14,7 @@ use resend_rs::Resend;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
+use std::sync::Arc;
 use std::{collections::HashMap, net::SocketAddr};
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -21,14 +23,6 @@ pub use self::error::{AxumError, Result};
 mod error;
 
 lazy_static! {
-    static ref HTTP_CLIENT: reqwest::Client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .expect("Failed to create HTTP client");
-
-    static ref GOOGLE_ENTERPRISE_API_KEY: String = env::var("GOOGLE_ENTERPRISE_API_KEY")
-        .expect("GOOGLE_ENTERPRISE_API_KEY must be set");
-
     static ref EMAIL_REGEX: Regex = Regex::new(
         r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
     ).expect("Failed to compile email regex");
@@ -37,18 +31,60 @@ lazy_static! {
         .expect("Failed to compile site name regex");
 }
 
+#[async_trait]
+trait EmailSender: Send + Sync {
+    async fn send(&self, api_key: &str, from: String, to: String, subject: &str, body: &str) -> Result<()>;
+}
+
+struct ResendEmailSender;
+
+#[async_trait]
+impl EmailSender for ResendEmailSender {
+    async fn send(&self, api_key: &str, from: String, to: String, subject: &str, body: &str) -> Result<()> {
+        let resend = Resend::new(api_key);
+        let email = CreateEmailBaseOptions::new(from, [to], subject).with_text(body);
+        resend.emails.send(email).await.map_err(|e| {
+            eprintln!("Resend email error: {}", e);
+            AxumError::ResendError(format!("Failed to send email: {}", e))
+        })?;
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct AppState {
+    http_client: reqwest::Client,
+    email_sender: Arc<dyn EmailSender>,
+    recaptcha_api_base: String,
+    google_api_key: String,
+    google_project_id: String,
+    resend_api_key: String,
+}
+
 #[derive(Serialize)]
 struct JsonResponse {
     message: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct CaptchaForm {
+    #[serde(rename = "g-recaptcha-response")]
+    g_recaptcha_response: String,
+    site: String,
+    #[serde(flatten)]
+    pub fields_in_contact_form: HashMap<String, String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
 
-    // Force initialization of lazy statics to validate env vars early
-    lazy_static::initialize(&GOOGLE_ENTERPRISE_API_KEY);
-    lazy_static::initialize(&HTTP_CLIENT);
+    let google_api_key = env::var("GOOGLE_ENTERPRISE_API_KEY")
+        .expect("GOOGLE_ENTERPRISE_API_KEY must be set");
+    let google_project_id = env::var("GOOGLE_PROJECT_ID")
+        .expect("GOOGLE_PROJECT_ID must be set");
+    let resend_api_key = env::var("RESEND_API_KEY")
+        .expect("RESEND_API_KEY must be set");
 
     let dsn = env::var("SENTRY_DSN").expect("Missing SENTRY_DSN");
     let _guard = sentry::init((
@@ -59,7 +95,6 @@ async fn main() -> Result<()> {
         },
     ));
 
-    // Configure CORS - specify allowed origins from environment variable
     let allowed_origins =
         env::var("ALLOWED_ORIGINS").expect("ALLOWED_ORIGINS environment variable must be set");
 
@@ -92,12 +127,24 @@ async fn main() -> Result<()> {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
         .allow_credentials(true);
 
-    // Limit request body size to 1MB to prevent abuse
+    let state = Arc::new(AppState {
+        http_client: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("Failed to create HTTP client"),
+        email_sender: Arc::new(ResendEmailSender),
+        recaptcha_api_base: "https://recaptchaenterprise.googleapis.com".to_string(),
+        google_api_key,
+        google_project_id,
+        resend_api_key,
+    });
+
     let routes_all = Router::new()
         .route("/health", get(handler_healthy))
         .route("/captcha", post(handler_captcha))
         .layer(cors)
-        .layer(RequestBodyLimitLayer::new(1024 * 1024));
+        .layer(RequestBodyLimitLayer::new(1024 * 1024))
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 2121));
     println!("Listening on http://{}", addr);
@@ -121,17 +168,10 @@ async fn handler_healthy() -> impl IntoResponse {
     })
 }
 
-#[derive(Deserialize, Debug)]
-struct CaptchaForm {
-    #[serde(rename = "g-recaptcha-response")]
-    g_recaptcha_response: String,
-    site: String,
-    #[serde(flatten)]
-    pub fields_in_contact_form: HashMap<String, String>,
-}
-
-async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
-    // Validate site name
+async fn handler_captcha(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<CaptchaForm>,
+) -> impl IntoResponse {
     if !SITE_NAME_REGEX.is_match(&form.site) {
         return (
             StatusCode::BAD_REQUEST,
@@ -142,7 +182,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             .into_response();
     }
 
-    // Validate email if present in fields
     if let Some(email) = form.fields_in_contact_form.get("email") {
         if !EMAIL_REGEX.is_match(email) {
             return (
@@ -155,7 +194,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         }
     }
 
-    // Validate captcha response is not empty
     if form.g_recaptcha_response.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -166,21 +204,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
             .into_response();
     }
 
-    // Get the Google Cloud project ID from environment
-    let project_id = match env::var("GOOGLE_PROJECT_ID") {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(JsonResponse {
-                    message: "Server configuration error: missing project ID".to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    // Get the site-specific reCAPTCHA site key from environment
     let site_upper = form.site.to_ascii_uppercase();
     let site_key = match env::var(format!("{}_RECAPTCHA_SITE_KEY", site_upper)) {
         Ok(key) => key,
@@ -195,7 +218,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         }
     };
 
-    // Build the Enterprise API request body
     let request_body = json!({
         "event": {
             "token": form.g_recaptcha_response,
@@ -203,13 +225,13 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         }
     });
 
-    // Use the Enterprise reCAPTCHA API endpoint
     let url = format!(
-        "https://recaptchaenterprise.googleapis.com/v1/projects/{}/assessments?key={}",
-        project_id, GOOGLE_ENTERPRISE_API_KEY.as_str()
+        "{}/v1/projects/{}/assessments?key={}",
+        state.recaptcha_api_base, state.google_project_id, state.google_api_key
     );
 
-    let res = match HTTP_CLIENT
+    let res = match state
+        .http_client
         .post(&url)
         .json(&request_body)
         .send()
@@ -242,12 +264,18 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         }
     };
 
-    // Enterprise API returns tokenProperties.valid instead of success
     let is_valid = json["tokenProperties"]["valid"].as_bool().unwrap_or(false);
 
     if is_valid {
         println!("Captcha verification succeeded for site: {}", form.site);
-        match send_email_based_on_site(&form.site, &form.fields_in_contact_form).await {
+        match send_email_based_on_site(
+            state.email_sender.as_ref(),
+            &state.resend_api_key,
+            &form.site,
+            &form.fields_in_contact_form,
+        )
+        .await
+        {
             Ok(_) => {
                 println!("Email sent successfully for site: {}", form.site);
                 (
@@ -282,7 +310,6 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
         let err = AxumError::CaptchaFailedError(json.clone());
         sentry::capture_error(&err);
 
-        // Extract error reason from Enterprise API response
         let error_msg = json["tokenProperties"]["invalidReason"]
             .as_str()
             .unwrap_or("Unknown error");
@@ -297,10 +324,13 @@ async fn handler_captcha(Form(form): Form<CaptchaForm>) -> impl IntoResponse {
     }
 }
 
-async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) -> Result<()> {
+async fn send_email_based_on_site(
+    email_sender: &dyn EmailSender,
+    resend_api_key: &str,
+    site: &str,
+    fields: &HashMap<String, String>,
+) -> Result<()> {
     let site_upper = site.to_ascii_uppercase();
-
-    let api_key = env::var("RESEND_API_KEY").map_err(|_| AxumError::ResendAPIKeyError)?;
 
     let email_to =
         env::var(format!("{}_EMAIL_TO", site_upper)).map_err(|_| AxumError::SiteNotFoundError)?;
@@ -308,7 +338,6 @@ async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) 
     let email_from =
         env::var(format!("{}_EMAIL_FROM", site_upper)).map_err(|_| AxumError::SiteNotFoundError)?;
 
-    // Validate email addresses
     if !EMAIL_REGEX.is_match(&email_to) {
         return Err(AxumError::ValidationError(format!(
             "Invalid recipient email: {}",
@@ -329,20 +358,9 @@ async fn send_email_based_on_site(site: &str, fields: &HashMap<String, String>) 
     );
     let subject = "New lead from your website!";
 
-    let resend = Resend::new(&api_key);
-    let email =
-        CreateEmailBaseOptions::new(email_from, [email_to], subject).with_text(body.as_str());
-    let res = resend.emails.send(email).await;
-    match res {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            eprintln!("Resend email error: {}", err);
-            Err(AxumError::ResendError(format!(
-                "Failed to send email: {}",
-                err
-            )))
-        }
-    }
+    email_sender
+        .send(resend_api_key, email_from, email_to, subject, &body)
+        .await
 }
 
 fn hashmap_to_string(map: &HashMap<String, String>) -> String {
@@ -356,47 +374,266 @@ fn hashmap_to_string(map: &HashMap<String, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serial_test::serial;
+    use tower::ServiceExt;
+    use wiremock::matchers::{method, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn setup_env() {
-        dotenv::from_filename(".env.testing").ok();
+    struct MockEmailSender {
+        should_fail: bool,
     }
-    #[tokio::test]
-    async fn test_send_email_based_on_site() {
-        setup_env();
-        let site = "donaldson_africa";
-        let mut fields = HashMap::new();
-        fields.insert("name".to_string(), "Test Name".to_string());
-        fields.insert("email".to_string(), "test@example.com".to_string());
-        fields.insert("message".to_string(), "Test message".to_string());
 
-        // Call the function being tested
-        let result = send_email_based_on_site(site, &fields).await;
-
-        // Assert that the result is as expected
-        match result {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Test failed with error: {:?}", e);
-                panic!("Expected Ok, got Err: {}", e);
+    #[async_trait]
+    impl EmailSender for MockEmailSender {
+        async fn send(
+            &self,
+            _api_key: &str,
+            _from: String,
+            _to: String,
+            _subject: &str,
+            _body: &str,
+        ) -> Result<()> {
+            if self.should_fail {
+                Err(AxumError::ResendError("mock failure".to_string()))
+            } else {
+                Ok(())
             }
         }
     }
 
-    #[tokio::test]
-    async fn test_send_email_based_on_site_fails() {
-        setup_env();
-        // Set up test data
-        let site = "incorrect site";
-        let fields = HashMap::new();
+    fn make_app(email_sender: Arc<dyn EmailSender>, recaptcha_base: &str) -> Router {
+        let state = Arc::new(AppState {
+            http_client: reqwest::Client::new(),
+            email_sender,
+            recaptcha_api_base: recaptcha_base.to_string(),
+            google_api_key: "test-google-key".to_string(),
+            google_project_id: "test-project".to_string(),
+            resend_api_key: "test-resend-key".to_string(),
+        });
+        Router::new()
+            .route("/health", get(handler_healthy))
+            .route("/captcha", post(handler_captcha))
+            .with_state(state)
+    }
 
-        // Call the function being tested
-        let result = send_email_based_on_site(site, &fields).await;
-
-        // Assert that the result is as expected
-        match result {
-            Ok(_) => panic!("expected error"),
-            Err(AxumError::SiteNotFoundError) => {}
-            Err(_) => panic!("wrong error"),
+    // Sets per-site env vars needed by send_email_based_on_site and handler_captcha.
+    // Tests using this must be marked #[serial] to avoid races on env vars.
+    fn set_site_env_vars(site_upper: &str) {
+        unsafe {
+            env::set_var(
+                format!("{}_RECAPTCHA_SITE_KEY", site_upper),
+                "test-site-key",
+            );
+            env::set_var(format!("{}_EMAIL_TO", site_upper), "to@example.com");
+            env::set_var(format!("{}_EMAIL_FROM", site_upper), "from@example.com");
         }
+    }
+
+    #[tokio::test]
+    async fn test_health() {
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            "http://unused",
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_site_name() {
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            "http://unused",
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("g-recaptcha-response=token&site=invalid+site"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_empty_captcha_token() {
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            "http://unused",
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("g-recaptcha-response=&site=mysite"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_email_field() {
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            "http://unused",
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "g-recaptcha-response=token&site=mysite&email=notanemail",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_unconfigured_site() {
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            "http://unused",
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "g-recaptcha-response=token&site=unregisteredsite99999",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_valid_captcha_sends_email() {
+        set_site_env_vars("TESTSITE");
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/v1/projects/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tokenProperties": { "valid": true }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            &mock_server.uri(),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("g-recaptcha-response=valid-token&site=testsite"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_invalid_captcha_token() {
+        set_site_env_vars("TESTSITE");
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/v1/projects/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tokenProperties": { "valid": false, "invalidReason": "EXPIRED" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: false }),
+            &mock_server.uri(),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "g-recaptcha-response=expired-token&site=testsite",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_email_send_failure_returns_500() {
+        set_site_env_vars("TESTSITE");
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/v1/projects/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tokenProperties": { "valid": true }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app = make_app(
+            Arc::new(MockEmailSender { should_fail: true }),
+            &mock_server.uri(),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/captcha")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("g-recaptcha-response=valid-token&site=testsite"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn test_send_email_unconfigured_site() {
+        let sender = MockEmailSender { should_fail: false };
+        let result =
+            send_email_based_on_site(&sender, "fake-key", "no_such_site_xyz", &HashMap::new())
+                .await;
+        assert!(matches!(result, Err(AxumError::SiteNotFoundError)));
     }
 }
