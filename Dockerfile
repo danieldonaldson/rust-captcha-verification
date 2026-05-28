@@ -1,5 +1,5 @@
 # Multi-stage build for Rust application
-FROM rust:1.95-slim AS builder
+FROM rust:1.95-slim-bookworm AS builder
 
 WORKDIR /app
 
