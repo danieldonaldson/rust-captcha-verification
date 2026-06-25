@@ -24,7 +24,7 @@ jobs:
         run: echo "::set-output name=hash::$(sha256sum Cargo.lock | awk '{print $1}')"
       
       - name: Cache target directory
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: target
           key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ steps.cache-key.outputs.hash }}
