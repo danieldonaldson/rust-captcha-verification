@@ -12,7 +12,7 @@ dotenv = "0.15"
 lazy_static = "1.4"
 regex = "1.12"
 reqwest = { version = "0.13", features = ["json"] }
-resend-rs = "0.25"
+resend-rs = "0.30"
 sentry = "0.48"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
