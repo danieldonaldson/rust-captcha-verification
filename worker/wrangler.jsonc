@@ -7,8 +7,7 @@
   // Custom Domains: Cloudflare owns these DNS records and points them at this
   // Worker. No origin server is referenced any more.
   "routes": [
-    { "pattern": "captcha.stead.africa", "custom_domain": true },
-    { "pattern": "captcha-dev.stead.africa", "custom_domain": true }
+    { "pattern": "captcha.stead.africa", "custom_domain": true }
   ],
   "observability": {
     "enabled": true
