@@ -1,0 +1,15 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+GOOGLE_ENTERPRISE_API_KEY=""
+GOOGLE_PROJECT_ID=""
+RESEND_API_KEY=""
+SENTRY_DSN=""
+
+ALLOWED_ORIGINS="http://localhost:4321,https://donaldson.africa,https://stead.africa"
+
+DONALDSON_AFRICA_RECAPTCHA_SITE_KEY=""
+DONALDSON_AFRICA_EMAIL_TO=""
+DONALDSON_AFRICA_EMAIL_FROM=""
+
+STEAD_AFRICA_RECAPTCHA_SITE_KEY=""
+STEAD_AFRICA_EMAIL_TO=""
+STEAD_AFRICA_EMAIL_FROM=""
