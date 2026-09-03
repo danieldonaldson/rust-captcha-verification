@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@sentry/cloudflare": "^10.71.0"
+    "@sentry/cloudflare": "^10.72.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260825.1",
