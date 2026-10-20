@@ -22,7 +22,15 @@ export default Sentry.withSentry(
   (env: Env) => ({
     // An empty DSN disables Sentry, so the Worker runs fine without it set.
     dsn: env.SENTRY_DSN ?? '',
-    sendDefaultPii: false,
+    // Sentry 11 collects everything by default; contact-form submissions
+    // carry names and email addresses, so keep request data out of events.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+    },
   }),
   handler,
 );
