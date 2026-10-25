@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@sentry/cloudflare':
         specifier: ^11.8.0
-        version: 11.8.0(@cloudflare/workers-types@5.20261019.1)(vite@8.2.2(esbuild@0.28.2))(wrangler@4.151.3(@cloudflare/workers-types@5.20261019.1))
+        version: 11.8.0(@cloudflare/workers-types@5.20261019.1)(vite@8.3.5(esbuild@0.28.2))(wrangler@4.151.3(@cloudflare/workers-types@5.20261019.1))
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261019.1
@@ -20,7 +20,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: ^5.0.5
-        version: 5.0.5(@opentelemetry/api@1.9.1)(vite@8.2.2(esbuild@0.28.2))
+        version: 5.0.5(@opentelemetry/api@1.9.1)(vite@8.3.5(esbuild@0.28.2))
       wrangler:
         specifier: ^4.151.3
         version: 4.151.3(@cloudflare/workers-types@5.20261019.1)
@@ -934,13 +934,13 @@ packages:
   unenv@2.0.0-rc.24:
     resolution: {integrity: sha512-i7qRCmY42zmCwnYlh9H2SvLEypEFGye5iRmEMKjcGi7zk9UquigRjFtTLz0TYqr0ZGLZhaMHl/foy1bZR+Cwlw==}
 
-  vite@8.2.2:
-    resolution: {integrity: sha512-cFKLV/PRgAUlIRm5WjMjJ86jrftzpqcgH+Us+DS8mI3CDNiH30Whrz8uHL3+MOLPAgqbMBAqWdAHAphOAM+z/Q==}
+  vite@8.3.5:
+    resolution: {integrity: sha512-z1YpjieJ9g0ebTmQpLBv/oq9E3F9EIlOe+7LahW8SrE3LTiG3udBRUXQOlYXP9b+IC2q2phHeVxj9xGlw34OEQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
       '@types/node': ^20.19.0 || >=22.12.0
-      '@vitejs/devtools': ^0.4.0 || ^0.5.0
+      '@vitejs/devtools': ^0.7.1 || ^0.8.0
       esbuild: ^0.27.0 || ^0.28.0
       jiti: '>=1.21.0'
       less: ^4.0.0
@@ -1355,7 +1355,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@sentry/cloudflare@11.8.0(@cloudflare/workers-types@5.20261019.1)(vite@8.2.2(esbuild@0.28.2))(wrangler@4.151.3(@cloudflare/workers-types@5.20261019.1))':
+  '@sentry/cloudflare@11.8.0(@cloudflare/workers-types@5.20261019.1)(vite@8.3.5(esbuild@0.28.2))(wrangler@4.151.3(@cloudflare/workers-types@5.20261019.1))':
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@sentry/conventions': 0.27.0
@@ -1365,7 +1365,7 @@ snapshots:
       magic-string: 0.30.21
     optionalDependencies:
       '@cloudflare/workers-types': 5.20261019.1
-      vite: 8.2.2(esbuild@0.28.2)
+      vite: 8.3.5(esbuild@0.28.2)
       wrangler: 4.151.3(@cloudflare/workers-types@5.20261019.1)
 
   '@sentry/conventions@0.27.0': {}
@@ -1459,14 +1459,14 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vitest/mocker@5.0.5(vite@8.2.2(esbuild@0.28.2))':
+  '@vitest/mocker@5.0.5(vite@8.3.5(esbuild@0.28.2))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.5
       estree-walker: 3.0.3
       magic-string: 1.4.3
     optionalDependencies:
-      vite: 8.2.2(esbuild@0.28.2)
+      vite: 8.3.5(esbuild@0.28.2)
 
   '@vitest/spy@5.0.5': {}
 
@@ -1718,7 +1718,7 @@ snapshots:
     dependencies:
       pathe: 2.0.3
 
-  vite@8.2.2(esbuild@0.28.2):
+  vite@8.3.5(esbuild@0.28.2):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -1729,10 +1729,10 @@ snapshots:
       esbuild: 0.28.2
       fsevents: 2.3.3
 
-  vitest@5.0.5(@opentelemetry/api@1.9.1)(vite@8.2.2(esbuild@0.28.2)):
+  vitest@5.0.5(@opentelemetry/api@1.9.1)(vite@8.3.5(esbuild@0.28.2)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.5(vite@8.2.2(esbuild@0.28.2))
+      '@vitest/mocker': 5.0.5(vite@8.3.5(esbuild@0.28.2))
       chai: 6.3.0
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -1743,7 +1743,7 @@ snapshots:
       tinybench: 6.2.2
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
-      vite: 8.2.2(esbuild@0.28.2)
+      vite: 8.3.5(esbuild@0.28.2)
       why-is-node-running: 3.2.1
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
